@@ -1,0 +1,20 @@
+# ROS2 build and install folders
+build/
+install/
+log/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Colcon/ament artifacts
+.colcon/
+.colcon_install_layout.*
+
+# VS Code settings
+.vscode/
+
+# Misc
+*.swp
+*.bak
+*.tmp
