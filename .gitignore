@@ -18,3 +18,7 @@ __pycache__/
 *.swp
 *.bak
 *.tmp
+
+# Ignore specific files
+# These files are not part of the source code and should not be tracked
+audio_recordings/
