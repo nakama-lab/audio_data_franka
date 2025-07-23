@@ -25,7 +25,7 @@ class AudioPlayer(Node):
             )
             
             # Audio configuration
-            self.fs = 44100
+            self.fs = 16000
             self.stream = sd.OutputStream(
                 samplerate=self.fs,
                 channels=1,
@@ -67,7 +67,8 @@ def main(args=None):
         node.get_logger().info("Shutting down player...")
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

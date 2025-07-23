@@ -1,18 +1,14 @@
-from rclpy.qos import (
-    QoSProfile,
-    QoSReliabilityPolicy,
-    QoSHistoryPolicy,
-    LivelinessPolicy,
-    QoSDurabilityPolicy
-)
-import rclpy.duration
+# utils.py
+
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
 
 def get_audio_qos():
+    """
+    Returns a QoSProfile suitable for audio transmission and rosbag compatibility.
+    """
     return QoSProfile(
-        reliability=QoSReliabilityPolicy.BEST_EFFORT,  # Ensure delivery
-        history=QoSHistoryPolicy.KEEP_LAST,         # Keep recent samples
-        depth=10,                                   # Buffer size
-        deadline=rclpy.duration.Duration(seconds=0.1), # Max delay
-        liveliness=LivelinessPolicy.AUTOMATIC,  # Automatic liveliness
-        liveliness_lease_duration=rclpy.duration.Duration(seconds=1)
+        reliability=QoSReliabilityPolicy.BEST_EFFORT,   # Use BEST_EFFORT for lower latency, RELIABLE for guaranteed delivery
+        durability=QoSDurabilityPolicy.VOLATILE,
+        history=QoSHistoryPolicy.KEEP_LAST,
+        depth=10
     )

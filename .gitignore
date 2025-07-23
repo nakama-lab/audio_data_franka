@@ -22,3 +22,4 @@ __pycache__/
 # Ignore specific files
 # These files are not part of the source code and should not be tracked
 audio_recordings/
+audio_image_bag*/

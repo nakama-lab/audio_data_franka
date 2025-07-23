@@ -12,38 +12,40 @@ import sys
 import select
 import tty
 import termios
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy
+from .utils import get_audio_qos
 from rclpy.serialization import serialize_message
 import rosbag2_py
 
 class AudioRecorder(Node):
     def __init__(self):
         super().__init__('audio_recorder')
-        
+
         # Audio configuration
-        self.fs = 16000  # Standard for speech processing
-        self.channels = 1  # Mono
-        self.dtype = 'int16'  # Standard PCM format
-        
+        self.fs = 16000
+        self.channels = 1
+        self.dtype = 'int16'
+
         # File saving configuration
         self.output_dir = os.path.expanduser('~/audio_recordings')
         os.makedirs(self.output_dir, exist_ok=True)
-        
-        # ROS 2 setup with QoS
-        audio_qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.RELIABLE,
-            depth=10
-        )
+
+        # Rosbag directory with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.bag_dir = f'audio_image_bag_{timestamp}'
+
+        # QoS profile setup
+        qos_profile = get_audio_qos()
+
         self.publisher = self.create_publisher(
             UInt8MultiArray,
             '/audio_data',
-            qos_profile=audio_qos
+            qos_profile=qos_profile
         )
-        
+
         # Rosbag2 writer setup
         self.bag_writer = rosbag2_py.SequentialWriter()
         storage_options = rosbag2_py.StorageOptions(
-            uri='audio_image_bag',
+            uri=self.bag_dir,
             storage_id='sqlite3'
         )
         converter_options = rosbag2_py.ConverterOptions(
@@ -51,48 +53,42 @@ class AudioRecorder(Node):
             output_serialization_format='cdr'
         )
         self.bag_writer.open(storage_options, converter_options)
-        
+
         # Create topics in the bag
-        audio_topic_info = rosbag2_py.TopicMetadata(
+        self.bag_writer.create_topic(rosbag2_py.TopicMetadata(
             name='/audio_data',
             type='std_msgs/msg/UInt8MultiArray',
             serialization_format='cdr'
-        )
-        image_topic_info = rosbag2_py.TopicMetadata(
+        ))
+        self.bag_writer.create_topic(rosbag2_py.TopicMetadata(
             name='/image',
             type='sensor_msgs/msg/Image',
             serialization_format='cdr'
-        )
-        self.bag_writer.create_topic(audio_topic_info)
-        self.bag_writer.create_topic(image_topic_info)
-        
-        # Image subscription for synchronization
+        ))
+
         self.image_sub = self.create_subscription(
             Image,
             '/image',
             self.image_callback,
-            qos_profile=10
+            qos_profile=qos_profile
         )
-        
+
         self.recording = []
         self.stream = None
         self.current_filename = None
         self.last_image_msg = None
 
     def image_callback(self, msg):
-        """Store the latest image message for synchronization"""
         self.last_image_msg = msg
 
     def continuous_recording(self):
-        """Record continuously until Enter key is pressed"""
         self.get_logger().info("Starting continuous recording...")
         self.get_logger().info("Press Enter to stop recording...")
-        
-        # Set up non-blocking keyboard input
+
         old_settings = termios.tcgetattr(sys.stdin)
         try:
             tty.setcbreak(sys.stdin.fileno())
-            
+
             # Start audio stream
             self.stream = sd.InputStream(
                 samplerate=self.fs,
@@ -100,62 +96,59 @@ class AudioRecorder(Node):
                 dtype=self.dtype,
                 callback=self.audio_callback
             )
-            
-            # Create filename
+
+            # Create unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.current_filename = os.path.join(
-                self.output_dir, 
+                self.output_dir,
                 f"recording_{timestamp}.wav"
             )
-            
+
             with self.stream:
                 while rclpy.ok():
-                    # Check for Enter key press
                     if select.select([sys.stdin], [], [], 0)[0]:
                         if sys.stdin.read(1) == '\n':
                             break
-                    
-                    # Process any ROS callbacks
                     rclpy.spin_once(self, timeout_sec=0.01)
-            
-            # Save recording when loop exits
+
             self.save_recording()
-            
+
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
     def audio_callback(self, indata, frames, time, status):
-        """Callback for audio data"""
         self.recording.extend(indata.copy())
-        
-        # Create and publish audio message
+
+        # Create and publish ROS message
         audio_msg = UInt8MultiArray()
         audio_msg.data = indata.tobytes()
         self.publisher.publish(audio_msg)
-        
-        # Write to rosbag with synchronized image if available
+
+        # Timestamp as int (nanoseconds)
+        stamp = self.get_clock().now().to_msg()
+        timestamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+
+        # Write audio message to bag
+        self.bag_writer.write(
+            '/audio_data',
+            serialize_message(audio_msg),
+            timestamp_ns
+        )
+
+        # Write last image (if exists) with same timestamp
         if self.last_image_msg:
-            audio_stamp = self.get_clock().now().to_msg()
-            audio_msg.header.stamp = audio_stamp
-            
-            # Write synchronized messages to bag
-            self.bag_writer.write(
-                '/audio_data',
-                serialize_message(audio_msg),
-                audio_stamp
-            )
             self.bag_writer.write(
                 '/image',
                 serialize_message(self.last_image_msg),
-                audio_stamp
-            )
+                timestamp_ns
+    )
+
 
     def save_recording(self):
-        """Save buffered audio to file"""
-        if len(self.recording) == 0:
+        if not self.recording:
             self.get_logger().warning("No audio data to save")
             return
-            
+
         recording = np.concatenate(self.recording)
         sf.write(
             self.current_filename,
@@ -167,16 +160,15 @@ class AudioRecorder(Node):
         self.recording.clear()
 
     def destroy_node(self):
-        """Clean up resources"""
         if hasattr(self, 'stream') and self.stream is not None:
             self.stream.close()
-        self.bag_writer.close()
+        # Removed .close() call to avoid AttributeError
         super().destroy_node()
 
 def main(args=None):
     rclpy.init(args=args)
     recorder = AudioRecorder()
-    
+
     try:
         recorder.continuous_recording()
     except KeyboardInterrupt:
@@ -185,10 +177,8 @@ def main(args=None):
         recorder.get_logger().error(f"Error: {str(e)}")
     finally:
         recorder.destroy_node()
-        try:
+        if rclpy.ok():
             rclpy.shutdown()
-        except:
-            pass  # Ignore if already shutdown
 
 if __name__ == '__main__':
     main()
